@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sofi Smart-Mapping Workspace</title>
+    <!-- Premium Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="index.css">
+</head>
+<body class="dark-theme">
+    
+    <!-- Outer Glass App Shell -->
+    <div class="app-shell" id="app_shell">
+        
+        <!-- Sidebar Navigation Pane -->
+        <aside class="app-sidebar" id="app_sidebar">
+            <div class="sidebar-brand">
+                <div class="brand-logo">
+                    <svg viewBox="0 0 24 24" width="24" height="24" stroke="currentColor" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round" class="logo-svg">
+                        <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+                        <polyline points="2 17 12 22 22 17"></polyline>
+                        <polyline points="2 12 12 17 22 12"></polyline>
+                    </svg>
+                </div>
+                <div class="brand-text">
+                    <h1>Smart-Mapping</h1>
+                    <span>Disclosure Engine v1.0</span>
+                </div>
+            </div>
+
+            <!-- Taxonomy Selection Block -->
+            <div class="sidebar-section">
+                <h3 class="section-title">Active Taxonomy</h3>
+                <div class="taxonomy-selector-wrapper">
+                    <select id="taxonomy_selector" class="custom-select">
+                        <!-- Loaded dynamically -->
+                        <option value="" disabled selected>Loading Taxonomies...</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Filtering Panel -->
+            <div class="sidebar-section">
+                <h3 class="section-title">Concept Filters</h3>
+                <nav class="sidebar-nav">
+                    <button class="nav-btn active" id="filter_all" data-filter="all">
+                        <span class="nav-icon">&#9638;</span> All Concepts 
+                        <span class="badge" id="count_all">0</span>
+                    </button>
+                    <button class="nav-btn" id="filter_quantitative" data-filter="Quantitative">
+                        <span class="nav-icon">&#128202;</span> Quantitative
+                        <span class="badge" id="count_quantitative">0</span>
+                    </button>
+                    <button class="nav-btn" id="filter_narrative" data-filter="Narrative">
+                        <span class="nav-icon">&#128221;</span> Narrative / Text
+                        <span class="badge" id="count_narrative">0</span>
+                    </button>
+                    <button class="nav-btn" id="filter_choice" data-filter="Choice">
+                        <span class="nav-icon">&#9745;</span> Multiple Choice
+                        <span class="badge" id="count_choice">0</span>
+                    </button>
+                    <button class="nav-btn" id="filter_unmapped" data-filter="Unmapped">
+                        <span class="nav-icon">&#9888;</span> Unmapped Targets
+                        <span class="badge badge-warning" id="count_unmapped">0</span>
+                    </button>
+                    <button class="nav-btn" id="filter_mapped" data-filter="Mapped">
+                        <span class="nav-icon">&#9989;</span> Mapped Concepts
+                        <span class="badge badge-success" id="count_mapped">0</span>
+                    </button>
+                </nav>
+            </div>
+
+            <!-- Footer Stats Info -->
+            <div class="sidebar-footer">
+                <div class="connection-status">
+                    <span class="status-indicator online"></span>
+                    <span>Database: Connected</span>
+                </div>
+                <div class="copyright">&copy; 2026 Sofi TS Study</div>
+            </div>
+        </aside>
+
+        <!-- Main Workspace Workspace -->
+        <main class="app-main" id="app_main">
+            
+            <!-- Global Main Header -->
+            <header class="main-header" id="main_header">
+                <div class="header-search">
+                    <svg class="search-icon" viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none">
+                        <circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                    </svg>
+                    <input type="text" id="concept_search" placeholder="Search concepts by name or identifier..." autocomplete="off">
+                </div>
+                <div class="header-profile">
+                    <div class="profile-info">
+                        <span class="profile-name">Administrator</span>
+                        <span class="profile-role">Compliance Specialist</span>
+                    </div>
+                    <div class="profile-avatar">A</div>
+                </div>
+            </header>
+
+            <!-- Workspace Body -->
+            <div class="main-content" id="main_content">
+                
+                <!-- Welcome/State Box -->
+                <div class="dashboard-banner" id="dashboard_banner">
+                    <div class="banner-text">
+                        <h2 id="taxonomy_title">No Taxonomy Selected</h2>
+                        <p id="taxonomy_subtitle">Select an XBRL Taxonomy in the sidebar to review structures and map questionnaire positions.</p>
+                    </div>
+                </div>
+
+                <!-- Answer Filtering Console -->
+                <div class="filter-console glass-panel" id="filter_console">
+                    <div class="console-header">
+                        <span class="console-badge">Target Scope</span>
+                        <h3>Configure Reporting Context</h3>
+                    </div>
+                    <div class="console-filters">
+                        <div class="filter-field">
+                            <label for="customer_group_select">Customer / Corporate Group</label>
+                            <select id="customer_group_select" class="custom-select">
+                                <option value="" selected>All Customers (Global)</option>
+                            </select>
+                        </div>
+                        <div class="filter-field">
+                            <label for="operational_site_select">Operational Site</label>
+                            <select id="operational_site_select" class="custom-select" disabled>
+                                <option value="" selected>Select Group first...</option>
+                            </select>
+                        </div>
+                        <div class="filter-field">
+                            <label for="period_select">Reporting Time Period</label>
+                            <select id="period_select" class="custom-select">
+                                <option value="" selected>All Periods (Latest)</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Concepts Table View Container -->
+                <div class="table-container" id="table_container">
+                    <table class="premium-table" id="concepts_table">
+                        <thead>
+                            <tr>
+                                <th style="width: 40%;">Concept Schema Identifier</th>
+                                <th style="width: 12%;">Data Type</th>
+                                <th style="width: 12%;">Period Style</th>
+                                <th style="width: 16%;">Classification</th>
+                                <th style="width: 20%; text-align: center;">Smart Evaluation</th>
+                            </tr>
+                        </thead>
+                        <tbody id="concepts_table_body">
+                            <tr>
+                                <td colspan="5" class="empty-state">
+                                    <div class="empty-state-icon">&#128194;</div>
+                                    <h3>Select an XBRL Taxonomy Package</h3>
+                                    <p>Select a taxonomy from the dropdown on the left panel to load, classify, and predict smart mapping candidates.</p>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Smart Mapping / Recommendations Overlay Modal -->
+    <div class="modal-overlay" id="prediction_modal">
+        <div class="glass-modal">
+            <div class="modal-header">
+                <div class="modal-header-title">
+                    <span class="modal-label" id="modal_concept_classification">Quantitative</span>
+                    <h2 id="modal_concept_name">esrs_GreenhouseGasEmissionsCO2e</h2>
+                    <p id="modal_concept_subgroup" class="subgroup-text">Sub-group: E1 Climate Change</p>
+                </div>
+                <button class="close-btn" id="close_modal_btn">&times;</button>
+            </div>
+            
+            <div class="modal-body">
+                <!-- Tab controller for prediction and LLM context -->
+                <div class="modal-tabs">
+                    <button class="modal-tab-btn active" id="tab_candidates_btn">Heuristic Candidates</button>
+                    <button class="modal-tab-btn" id="tab_llm_predictions_btn">LLM Reranking</button>
+                    <button class="modal-tab-btn" id="tab_llm_context_btn">LLM Context Preview</button>
+                </div>
+
+                <!-- Predictive candidates checklist -->
+                <div class="modal-tab-content active" id="content_candidates">
+                    <div class="modal-section" style="margin-top: 15px;">
+                        <div class="section-header-row">
+                            <h3>Predictive Mapping Recommendations</h3>
+                            <span class="score-helper">Recommended mappings based on multi-factor scores</span>
+                        </div>
+                        
+                        <div class="candidates-list" id="candidates_list">
+                            <!-- Dynamically populated candidate blocks -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- LLM Reranked Candidates -->
+                <div class="modal-tab-content" id="content_llm_predictions" style="display: none; margin-top: 15px;">
+                    <div class="modal-section">
+                        <div class="section-header-row">
+                            <h3>LLM Reranked Candidates</h3>
+                            <span class="score-helper">Ranked matches evaluated against human mapping rules</span>
+                        </div>
+                        
+                        <div class="candidates-list" id="llm_candidates_list">
+                            <!-- Dynamically populated LLM reranked blocks -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- LLM Context Preview -->
+                <div class="modal-tab-content" id="content_llm_context" style="display: none; margin-top: 15px;">
+                    <div class="modal-section">
+                        <div class="section-header-row">
+                            <h3>Context Engineered LLM Prompt</h3>
+                            <span class="score-helper">The structured prompt payload compiled for the LLM</span>
+                            <button class="action-btn copy-btn" id="copy_context_btn" style="padding: 4px 12px; font-size: 0.8rem; background: var(--accent-purple); border: none; border-radius: 6px; cursor: pointer; color: white;">Copy Prompt</button>
+                        </div>
+                        <div class="context-preview-wrapper" style="margin-top: 10px;">
+                            <pre class="context-pre" style="background: hsla(0,0%,0%,0.35); padding: 15px; border-radius: 8px; border: 1px solid hsla(0,0%,100%,0.08); max-height: 400px; overflow-y: auto; overflow-x: hidden; white-space: pre-wrap; font-family: monospace; font-size: 0.85rem; line-height: 1.4;"><code id="context_preview_code">Loading Context Payload...</code></pre>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Answer Discovery Overlay Modal -->
+    <div class="modal-overlay" id="answer_modal">
+        <div class="glass-modal answer-modal-size">
+            <div class="modal-header">
+                <div class="modal-header-title">
+                    <span class="modal-label label-success" id="answer_confidence_badge">Mapped Direct Answer</span>
+                    <h2 id="answer_concept_name">esrs_GreenhouseGasEmissionsCO2e</h2>
+                    <p id="answer_concept_subgroup" class="subgroup-text">Sub-group: E1 Climate Change</p>
+                </div>
+                <button class="close-btn" id="close_answer_modal_btn">&times;</button>
+            </div>
+            
+            <div class="modal-body">
+                <!-- Giant Value Card -->
+                <div class="answer-value-card">
+                    <div class="value-label">Retrieved Best ESG Answer Value</div>
+                    <div class="value-display-wrapper">
+                        <span class="giant-value" id="answer_value_display">--</span>
+                        <span class="giant-unit" id="answer_unit_display">N/A</span>
+                    </div>
+                    <div class="value-meta" id="answer_meta_display">Recorded at Chicago for period 201507</div>
+                </div>
+
+                <!-- Source details -->
+                <div class="modal-section">
+                    <h3>Source Trace & Confidence Breakdown</h3>
+                    <div class="source-details-grid">
+                        <div class="detail-item">
+                            <span class="detail-label">Source Position Node</span>
+                            <span class="detail-value" id="answer_source_position">Green Electricity</span>
+                        </div>
+                        <div class="detail-item">
+                            <span class="detail-label">Position Type</span>
+                            <span class="detail-value" id="answer_source_type">Flow</span>
+                        </div>
+                        <div class="detail-item">
+                            <span class="detail-label">Evaluation Matching Score</span>
+                            <span class="detail-value highlight-text" id="answer_matching_score">92.4% Match</span>
+                          </div>
+                          <div class="detail-item">
+                              <span class="detail-label">Occurrence Date</span>
+                              <span class="detail-value" id="answer_occurrence_date">2015-07-15</span>
+                          </div>
+                      </div>
+                  </div>
+
+                  <!-- Ancestor path breadcrumbs -->
+                  <div class="modal-section">
+                      <h3>Resolved Structural Ancestry Path</h3>
+                      <div class="path-breadcrumbs" id="answer_resolved_path">
+                          <!-- Path steps populated dynamically -->
+                      </div>
+                  </div>
+              </div>
+          </div>
+      </div>
+
+    <!-- Alert / Toast Notification Center -->
+    <div class="toast-center" id="toast_center"></div>
+
+    <script src="app.js"></script>
+</body>
+</html>
