@@ -434,6 +434,7 @@ def run(cfg):
     write_reports(cfg, pos, quant, confident, lowconf, abstain_param, finalized)
     summary(quant, confident, lowconf, abstain_param, finalized, cfg)
     print_full_table(cfg, pos, confident, lowconf, abstain_param, finalized)
+    conf_stats(cfg, finalized)
 
 # ----------------------------------------------------------------------------- output
 def write_reports(cfg, pos, quant, confident, lowconf, abstain_param, finalized):
@@ -526,6 +527,20 @@ def print_full_table(cfg, pos, confident, lowconf, abstain_param, finalized):
     print(_ascii_table(["STATUS", "QUESTION", "DQ_ID", "ANSWER POSITION", "CONF"], rows))
     print("  STATUS: MAPPED = position(s) found · GAP = numeric metric but no position exists · "
           "REVIEW = match too weak · SKIP = reporting parameter")
+
+def conf_stats(cfg, finalized):
+    """Break the judge-selected positions down by CONF (cosine-similarity) tier.
+    Tiers use this CLI's own gate/floor: STRONG ≥conf, LIKELY floor-conf, WEAK <floor."""
+    def tier(c):
+        return "STRONG" if c >= cfg.conf else "LIKELY" if c >= cfg.floor else "WEAK"
+    tiers = Counter(tier(s["conf"]) for r in finalized for s in r["selected"])
+    npos = sum(tiers.values())
+    print("\n" + "=" * 60)
+    print(f"MAPPED-POSITION STATISTICS  (total: {npos})")
+    print(f"  STRONG (≥{cfg.conf})      : {tiers.get('STRONG', 0)}")
+    print(f"  LIKELY ({cfg.floor}-{cfg.conf})  : {tiers.get('LIKELY', 0)}")
+    print(f"  WEAK   (<{cfg.floor})      : {tiers.get('WEAK', 0)}")
+    print("=" * 60)
 
 def summary(quant, confident, lowconf, abstain_param, finalized, cfg):
     print("\n" + "=" * 60)
