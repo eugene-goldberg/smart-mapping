@@ -44,6 +44,10 @@ import smartmap as sm   # reuse the proven Azure client, embeddings, vector math
 
 MEAS = {"Flow", "Indicator", "Asset"}   # measurable position types (the quantitative answer space)
 
+def tier(score):
+    """Per-pick confidence tier from the normalized consensus score (calibrated vs golden)."""
+    return "STRONG" if score >= 0.60 else "LIKELY" if score >= 0.40 else "WEAK"
+
 # ----------------------------------------------------------------------------- config
 class GriCfg(sm.Cfg):
     def __init__(self, a):
@@ -56,6 +60,8 @@ class GriCfg(sm.Cfg):
         self.transfer_k = getattr(a, "transfer_k", None) or 8
         self.shortlist = getattr(a, "shortlist", None) or 12
         self.rel_floor = 0.50          # drop shortlist positions scoring < rel_floor * top consensus score
+        ms = getattr(a, "min_score", None)
+        self.min_score = 0.375 if ms is None else ms   # absolute floor on normalized score (trims weak tail)
         self.weight    = getattr(a, "weight", None) or "count"   # consensus weighting: count | sum
         self.ref_all   = not getattr(a, "ref_grid_only", False)  # transfer from ALL golden Qs (not just grid)
         self.use_judge = getattr(a, "judge", False)   # OFF by default (judge hurts recall on GRI)
@@ -147,9 +153,11 @@ def print_intro(cfg):
     print(f"    • SoFi MySQL via ssh '{cfg.ssh_host}': positions, GRI template, golden reference mappings")
     print(f"    • Azure OpenAI — embeddings: {cfg.emb_dep}"
           + (f";  judge: {cfg.chat_dep} (temp={cfg.temperature})" if cfg.use_judge else ";  judge: OFF"))
-    print("RESULT STATUSES")
+    print("RESULT STATUSES & CONFIDENCE TIERS")
     print("    MAPPED  = position(s) proposed   REVIEW = no confident neighbour (weak match)")
     print("    GAP     = (only with --judge) judge rejected every candidate")
+    print(f"    per-pick TIER: STRONG ≥0.60 (~90% near-prec) · LIKELY 0.40-0.60 · WEAK <0.40 "
+          f"(picks < --min-score={cfg.min_score} dropped)")
     print(L)
 
 # ----------------------------------------------------------------------------- pipeline
@@ -225,12 +233,15 @@ def run(cfg):
         (confident if (ranked and top_sim >= cfg.conf) else lowconf).append(rec)
     sm.info(f"confident (neighbour sim ≥ {cfg.conf}): {len(confident)} | weak → review: {len(lowconf)}")
 
-    # final selection = consensus shortlist (top-N above relative floor)
+    # final selection = consensus shortlist (top-N), kept above BOTH the relative floor
+    # (rel_floor × top) and the absolute floor (min_score, on the normalized 0-1 score)
+    K = max(cfg.transfer_k, 1)
     for r in confident:
         topscore = r["ranked"][0][1] if r["ranked"] else 0.0
-        sel = [(p, s) for p, s in r["ranked"][:cfg.shortlist] if s >= cfg.rel_floor * topscore]
+        sel = [(p, s) for p, s in r["ranked"][:cfg.shortlist]
+               if s >= cfg.rel_floor * topscore and (s / K) >= cfg.min_score]
         r["selected"] = [{"position_id": p, "name": pos["name"].get(p, ""),
-                          "score": round(s / max(cfg.transfer_k, 1), 3)} for p, s in sel]
+                          "score": round(s / K, 3), "tier": tier(s / K)} for p, s in sel]
 
     finalized = [{"nodeId": r["nodeId"], "dq_id": r["dq_id"], "ref": r["ref"],
                   "selected": r["selected"], "reasoning": "transfer-consensus"} for r in confident]
@@ -327,7 +338,7 @@ def write_reports(cfg, pos, grid, confident, lowconf, finalized):
         for r in confident:
             sel = fin_by_node.get(r["nodeId"], {}).get("selected", [])
             f.write(f"## {r['ref']}  (dq_id={r['dq_id']})\n- columns: {', '.join(r['concepts'])[:200]}\n")
-            for s in sel: f.write(f"  - [{s['score']}] {s['position_id']} — {s['name']}\n")
+            for s in sel: f.write(f"  - [{s.get('tier','')} {s['score']}] {s['position_id']} — {s['name']}\n")
             f.write("\n")
     with open(cfg.report_file("review"), "w", encoding="utf-8") as f:
         f.write(f"# GRI (template {cfg.template}) — review queue\n\n## Weak / no confident neighbour: {len(lowconf)}\n")
@@ -340,7 +351,7 @@ def write_reports(cfg, pos, grid, confident, lowconf, finalized):
         for r in finalized:
             if not r["selected"]: continue
             f.write(f"## {r['ref']}  (dq_id={r['dq_id']})\n")
-            for s in r["selected"]: f.write(f"  - {s['position_id']} — {s['name']} [{s['score']}]\n")
+            for s in r["selected"]: f.write(f"  - [{s.get('tier','')}] {s['position_id']} — {s['name']} ({s['score']})\n")
             f.write("\n")
 
 def print_full_table(cfg, pos, confident, lowconf, finalized):
@@ -353,22 +364,23 @@ def print_full_table(cfg, pos, confident, lowconf, finalized):
             for s in sel:
                 rows.append(["MAPPED" if first else "", r["ref"][:30] if first else "",
                              (r["dq_id"] or "") if first else "",
-                             f"{s['position_id']} {sm._trunc(pos['name'].get(s['position_id'],''),38)}",
-                             f"{s['score']:.2f}"]); first = False
+                             f"{s['position_id']} {sm._trunc(pos['name'].get(s['position_id'],''),36)}",
+                             f"{s['score']:.2f}", s.get("tier", tier(s["score"]))]); first = False
         else:
-            rows.append(["GAP", r["ref"][:30], r["dq_id"] or "", "judge rejected all candidates", f"{r['top_sim']:.2f}"])
+            rows.append(["GAP", r["ref"][:30], r["dq_id"] or "", "judge rejected all candidates", f"{r['top_sim']:.2f}", "-"])
     for r in lowconf:
         hint = r["hint"][0][0] if r["hint"] else "-"
-        rows.append(["REVIEW", r["ref"][:30], r["dq_id"] or "", f"no confident neighbour · hint {hint}", f"{r['top_sim']:.2f}"])
+        rows.append(["REVIEW", r["ref"][:30], r["dq_id"] or "", f"no confident neighbour · hint {hint}", f"{r['top_sim']:.2f}", "-"])
     print("\n" + "-" * 78)
-    print("WHAT 'SCORE' MEANS HERE")
+    print("WHAT 'SCORE' / 'TIER' MEAN HERE")
     print("-" * 78)
-    print("  SCORE (0.00-1.00) is a transfer-consensus strength: how strongly the nearest already-mapped")
-    print("  GRI questions agree on this position. It is NOT an AI/LLM confidence; treat the result as a")
-    print("  ranked review queue (measured ~69% recall / ~53% precision vs the GRI golden).")
+    print("  SCORE (0.00-1.00) = transfer-consensus strength: the fraction of the nearest already-mapped")
+    print("  GRI questions that agree on this position. NOT an AI/LLM confidence. Calibrated vs golden:")
+    print("    STRONG ≥0.60  (~90% near-precision — trust)   LIKELY 0.40-0.60  (~77% — quick check)")
+    print(f"    WEAK   <0.40  (review).  Picks below the absolute floor --min-score={cfg.min_score} are dropped.")
     print("-" * 78)
     print("\nFULL REPORT  (every GRI quantitative question, with status)")
-    print(sm._ascii_table(["STATUS", "QUESTION", "DQ_ID", "ANSWER POSITION", "SCORE"], rows))
+    print(sm._ascii_table(["STATUS", "QUESTION", "DQ_ID", "ANSWER POSITION", "SCORE", "TIER"], rows))
     print("  STATUS: MAPPED = position(s) proposed · REVIEW = no confident neighbour · GAP = judge rejected all (--judge)")
 
 def summary(cfg, grid, confident, lowconf, finalized):
@@ -405,6 +417,8 @@ def main():
         sp.add_argument("--ref-grid-only", action="store_true", dest="ref_grid_only",
                         help="transfer only from grid questions (default: all golden questions)")
         sp.add_argument("--conf", type=float, default=0.55, help="neighbour-similarity gate (default 0.55)")
+        sp.add_argument("--min-score", type=float, default=None, dest="min_score",
+                        help="absolute floor on the normalized 0-1 pick score (default 0.375; trims weak tail)")
         sp.add_argument("--judge", action="store_true", help="EXPERIMENTAL: LLM prune of the shortlist (lowers recall)")
         sp.add_argument("--no-judge-cache", action="store_true")
         sp.add_argument("--no-validate", action="store_true", help="skip scoring against golden")
