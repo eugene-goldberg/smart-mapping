@@ -254,6 +254,7 @@ def run(cfg):
     if cfg.validate and golden:
         validate(cfg, pos, grid, sid2qid, gmeas, confident, finalized)
     print_full_table(cfg, pos, confident, lowconf, finalized)
+    tier_stats(finalized)
 
 # ----------------------------------------------------------------------------- optional judge prune (experimental)
 def judge_prune(cfg, pos, confident):
@@ -383,22 +384,27 @@ def print_full_table(cfg, pos, confident, lowconf, finalized):
     print(sm._ascii_table(["STATUS", "QUESTION", "DQ_ID", "ANSWER POSITION", "SCORE", "TIER"], rows))
     print("  STATUS: MAPPED = position(s) proposed · REVIEW = no confident neighbour · GAP = judge rejected all (--judge)")
 
+def tier_stats(finalized):
+    tiers = collections.Counter(s.get("tier", tier(s["score"]))
+                                for r in finalized for s in r["selected"])
+    npos = sum(tiers.values())
+    print("\n" + "=" * 60)
+    print(f"PROPOSED-POSITION STATISTICS  (total: {npos})")
+    print(f"  STRONG (≥0.60)     : {tiers.get('STRONG', 0)}")
+    print(f"  LIKELY (0.40-0.60) : {tiers.get('LIKELY', 0)}")
+    print(f"  WEAK   (<0.40)     : {tiers.get('WEAK', 0)}")
+    print("=" * 60)
+
 def summary(cfg, grid, confident, lowconf, finalized):
     fin = [r for r in finalized if r["selected"]]
     print("\n" + "=" * 60)
     print(f"GRI template {cfg.template} (disc {cfg.disc}, ref {cfg.ref_disc})  |  "
           f"embed={cfg.emb_dep}  selector={'judge-prune' if cfg.use_judge else 'transfer-consensus'}")
-    tiers = collections.Counter(s.get("tier", tier(s["score"])) for r in fin for s in r["selected"])
-    npos = sum(tiers.values())
     print(f"  GRI quantitative (grid) questions : {len(grid)}")
     print(f"  mapped                            : {len(fin)}")
     print(f"  weak → review                     : {len(lowconf)}")
     if cfg.use_judge:
         print(f"  judge-rejected (GAP)              : {len(confident) - len(fin)}")
-    print(f"  proposed positions                : {npos}")
-    print(f"    STRONG (≥0.60)                  : {tiers.get('STRONG', 0)}")
-    print(f"    LIKELY (0.40-0.60)              : {tiers.get('LIKELY', 0)}")
-    print(f"    WEAK   (<0.40)                  : {tiers.get('WEAK', 0)}")
     print(f"  reports -> {os.path.basename(cfg.report_file('suggestions'))}, "
           f"{os.path.basename(cfg.report_file('review'))}, {os.path.basename(cfg.report_file('final'))}")
     print("=" * 60)
