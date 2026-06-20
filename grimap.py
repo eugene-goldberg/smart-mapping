@@ -388,11 +388,17 @@ def summary(cfg, grid, confident, lowconf, finalized):
     print("\n" + "=" * 60)
     print(f"GRI template {cfg.template} (disc {cfg.disc}, ref {cfg.ref_disc})  |  "
           f"embed={cfg.emb_dep}  selector={'judge-prune' if cfg.use_judge else 'transfer-consensus'}")
+    tiers = collections.Counter(s.get("tier", tier(s["score"])) for r in fin for s in r["selected"])
+    npos = sum(tiers.values())
     print(f"  GRI quantitative (grid) questions : {len(grid)}")
     print(f"  mapped                            : {len(fin)}")
     print(f"  weak → review                     : {len(lowconf)}")
     if cfg.use_judge:
         print(f"  judge-rejected (GAP)              : {len(confident) - len(fin)}")
+    print(f"  proposed positions                : {npos}")
+    print(f"    STRONG (≥0.60)                  : {tiers.get('STRONG', 0)}")
+    print(f"    LIKELY (0.40-0.60)              : {tiers.get('LIKELY', 0)}")
+    print(f"    WEAK   (<0.40)                  : {tiers.get('WEAK', 0)}")
     print(f"  reports -> {os.path.basename(cfg.report_file('suggestions'))}, "
           f"{os.path.basename(cfg.report_file('review'))}, {os.path.basename(cfg.report_file('final'))}")
     print("=" * 60)
