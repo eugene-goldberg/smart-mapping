@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 """Grounding experiment: does concept(column)-driven retrieval recover GRI golden measurable positions?
-Reuses smartmap's embedding + vector machinery. Measures recall@N vs disclosure-9 golden."""
+Reuses esrsmap's embedding + vector machinery. Measures recall@N vs disclosure-9 golden."""
 import sys, os, json, re, collections
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-import smartmap as sm
+import esrsmap as sm
 
 class A:
     data = out = framework = None; template = 24; disclosure = 9

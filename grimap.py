@@ -2,8 +2,8 @@
 """
 grimap.py — GRI quantitative (grid) disclosure-question -> position mapping (CLI).
 
-WHY THIS IS SEPARATE FROM smartmap.py
-  ESRS questions carry numeric XBRL datapoint concepts, so smartmap maps concept-name -> position.
+WHY THIS IS SEPARATE FROM esrsmap.py
+  ESRS questions carry numeric XBRL datapoint concepts, so esrsmap maps concept-name -> position.
   GRI templates carry NO XBRL concepts. GRI's quantitative questions are TABLE ('grid') questions
   (matrixdynamic / matrixset) whose COLUMNS are the numeric datapoints. GRI's usable signal is its
   curated GOLDEN reference: the positions already mapped to similar GRI questions.
@@ -34,13 +34,13 @@ USAGE
   ...                                          run --judge             # experimental: LLM prune (lowers recall)
   ...                                          extract                 # just refresh DB extracts
 
-Credentials/deployments come from smart-mapping/.env (same as smartmap.py).
+Credentials/deployments come from smart-mapping/.env (same as esrsmap.py).
 """
 import argparse, json, re, os, sys, hashlib, collections
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-import smartmap as sm   # reuse the proven Azure client, embeddings, vector math, narration, ascii table
+import esrsmap as sm   # reuse the proven Azure client, embeddings, vector math, narration, ascii table
 
 MEAS = {"Flow", "Indicator", "Asset"}   # measurable position types (the quantitative answer space)
 
@@ -166,7 +166,7 @@ def run(cfg):
     print_intro(cfg)
 
     sm.step("Extract source data from the SoFi database (always fresh, via ssh)")
-    sm.extract_data(cfg)            # positions + GRI template + sid->qid (reused from smartmap)
+    sm.extract_data(cfg)            # positions + GRI template + sid->qid (reused from esrsmap)
     extract_golden(cfg)             # + GRI golden reference
     sm.info(f"golden reference: {sum(1 for _ in open(cfg.golden_file()))} links from disclosure {cfg.ref_disc}")
 

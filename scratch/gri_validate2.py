@@ -4,7 +4,7 @@ Recipes: R1 columns-only; R2 +question text; R3 wider topk; R4 full subtree expa
 R5 leave-one-out transfer (question->nearest OTHER golden questions->their positions)."""
 import sys, os, json, re, collections
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-import smartmap as sm
+import esrsmap as sm
 
 class A:
     data = out = framework = None; template = 24; disclosure = 9

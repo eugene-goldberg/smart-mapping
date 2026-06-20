@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-smartmap.py — ESRS quantitative disclosure-question -> position mapping (CLI).
+esrsmap.py — ESRS quantitative disclosure-question -> position mapping (CLI).
 
 Consolidates the validated pipeline into one program. When invoked it reproduces the
 ESRS-2026 quantitative mapping run: 42 metric questions -> 39 confident -> gpt-5.4 judge ->
@@ -16,7 +16,7 @@ STAGES
   report      reporter suggestions, curator review queue, finalized mappings
 
 USAGE
-  ./.venv-tools/bin/python smart-mapping/smartmap.py run                 # full run (uses caches)
+  ./.venv-tools/bin/python smart-mapping/esrsmap.py run                 # full run (uses caches)
   ...                                          run --no-judge            # skip LLM judge
   ...                                          run --refresh-data        # re-pull from DB via ssh
   ...                                          run --refresh-embeddings  # re-embed positions

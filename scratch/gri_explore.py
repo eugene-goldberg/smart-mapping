@@ -8,7 +8,7 @@ fusion with concept retrieval, sibling expansion. Scoring: exact-ID and near-mat
 (granularity-tolerant: exact/parent/child/sibling)."""
 import sys, os, json, re, collections, pickle
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-import smartmap as sm
+import esrsmap as sm
 
 class A:
     data = out = framework = None; template = 24; disclosure = 9; conf = .55; floor = .5
