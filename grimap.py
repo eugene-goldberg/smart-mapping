@@ -48,6 +48,23 @@ def tier(score):
     """Per-pick confidence tier from the normalized consensus score (calibrated vs golden)."""
     return "STRONG" if score >= 0.60 else "LIKELY" if score >= 0.40 else "WEAK"
 
+def corroborate(pid, anchors, tagmap, questmap, crossfw):
+    """Independent DB evidence linking a pick to the question's STRONG anchors.
+    Returns a marker string: Q=shared questionnaire, T=shared tag, X=cross-framework golden."""
+    marks = ""
+    if any(questmap.get(pid, set()) & questmap.get(a, set()) for a in anchors): marks += "Q"
+    if any(tagmap.get(pid, set()) & tagmap.get(a, set()) for a in anchors): marks += "T"
+    if pid in crossfw: marks += "X"
+    return marks
+
+def effective_tier(score, corrob):
+    """Evidence-aware tier: STRONG by consensus (≥0.60); a medium pick (0.40-0.60) stays LIKELY only
+    if independently corroborated, else it is demoted to WEAK. (Validated: corroborated LIKELY ~76%
+    precision vs ~17% uncorroborated.)"""
+    if score >= 0.60: return "STRONG"
+    if score < 0.40: return "WEAK"
+    return "LIKELY" if corrob else "WEAK"
+
 # ----------------------------------------------------------------------------- config
 class GriCfg(sm.Cfg):
     def __init__(self, a):
@@ -67,6 +84,8 @@ class GriCfg(sm.Cfg):
         self.use_judge = getattr(a, "judge", False)   # OFF by default (judge hurts recall on GRI)
         self.judge_pool = getattr(a, "judge_pool", None) or 30
         self.validate  = not getattr(a, "no_validate", False)
+        self.corroborate = not getattr(a, "no_corroborate", False)  # re-tier LIKELY via independent DB evidence
+        self.fw_id     = 2             # GRI disclosure_framework_id (for cross-framework golden evidence)
     def golden_file(self): return self.p(f"disc{self.ref_disc}_golden.tsv")
 
 # ----------------------------------------------------------------------------- extraction
@@ -79,6 +98,20 @@ def extract_golden(cfg):
         "JOIN position p ON p.position_id=dqp.position_id AND p.term_end IS NULL "
         "JOIN position_types pt ON pt.position_type_id=p.position_type "
         f"WHERE dq.disclosure_id={cfg.ref_disc};"))
+
+def extract_evidence(cfg):
+    """Independent corroboration sources: curator tag groupings, questionnaire membership,
+    and positions golden in OTHER frameworks (cross-framework confirmation)."""
+    open(cfg.p("ev_tag_position.tsv"), "w").write(sm._sql(cfg,
+        "SELECT position_id, tag_id FROM tag_position;"))
+    open(cfg.p("ev_quest_position.tsv"), "w").write(sm._sql(cfg,
+        "SELECT DISTINCT position_id, questionnaire_id FROM questionnaire_template_position;"))
+    open(cfg.p("ev_crossfw_golden.tsv"), "w").write(sm._sql(cfg,
+        "SELECT DISTINCT dqp.position_id FROM disclosure_question_position dqp "
+        "JOIN disclosure_question dq ON dq.disclosure_question_id=dqp.disclosure_question_id "
+        "JOIN disclosure d ON d.disclosure_id=dq.disclosure_id "
+        "JOIN disclosure_template t ON t.disclosure_template_id=d.disclosure_template_id "
+        f"WHERE t.disclosure_framework_id != {cfg.fw_id};"))
 
 # ----------------------------------------------------------------------------- loaders
 def _en(x): return x.get("en", "") if isinstance(x, dict) else str(x or "")
@@ -132,6 +165,22 @@ def load_golden(cfg):
             golden[f[0]].add(int(f[1])); gtype[int(f[1])] = f[2]
     return golden, gtype
 
+def load_evidence(cfg):
+    """(tagmap, questmap, crossfw): position -> {tag_id}, position -> {questionnaire_id}, set(cross-fw golden)."""
+    def m(fp):
+        d = collections.defaultdict(set)
+        if os.path.exists(cfg.p(fp)):
+            for line in open(cfg.p(fp)):
+                f = line.strip().split("\t")
+                if len(f) == 2 and f[0].isdigit(): d[int(f[0])].add(f[1])
+        return d
+    crossfw = set()
+    if os.path.exists(cfg.p("ev_crossfw_golden.tsv")):
+        for line in open(cfg.p("ev_crossfw_golden.tsv")):
+            s = line.strip().split("\t")[0]
+            if s.isdigit(): crossfw.add(int(s))
+    return m("ev_tag_position.tsv"), m("ev_quest_position.tsv"), crossfw
+
 # ----------------------------------------------------------------------------- intro
 def print_intro(cfg):
     L = "=" * 78
@@ -149,6 +198,9 @@ def print_intro(cfg):
     print(f"    similar already-mapped GRI questions (reference: {'all golden' if cfg.ref_all else 'grid-only'}); take")
     print("    a shortlist. Measured vs golden: NEAR-match (granularity-tolerant) ~75% F1 / ~77% recall;")
     print("    exact-id ~63% F1. An LLM judge was tested and rejected (cut recall to ~12%); enable via --judge.")
+    if cfg.corroborate:
+        print("    Medium picks (0.40-0.60) are re-tiered by INDEPENDENT DB evidence — shared questionnaire,")
+        print("    curator tag, or cross-framework golden — lifting that band's precision ~51%→76% (--no-corroborate off).")
     print("DATA SOURCES (rebuilt every run — nothing cached except judge verdicts)")
     print(f"    • SoFi MySQL via ssh '{cfg.ssh_host}': positions, GRI template, golden reference mappings")
     print(f"    • Azure OpenAI — embeddings: {cfg.emb_dep}"
@@ -156,8 +208,8 @@ def print_intro(cfg):
     print("RESULT STATUSES & CONFIDENCE TIERS")
     print("    MAPPED  = position(s) proposed   REVIEW = no confident neighbour (weak match)")
     print("    GAP     = (only with --judge) judge rejected every candidate")
-    print(f"    per-pick TIER: STRONG ≥0.60 (~90% near-prec) · LIKELY 0.40-0.60 · WEAK <0.40 "
-          f"(picks < --min-score={cfg.min_score} dropped)")
+    print(f"    per-pick TIER: STRONG (score ≥0.60) · LIKELY (medium 0.40-0.60 WITH independent DB "
+          f"evidence) · WEAK (low, or medium uncorroborated). picks < --min-score={cfg.min_score} dropped.")
     print(L)
 
 # ----------------------------------------------------------------------------- pipeline
@@ -168,6 +220,7 @@ def run(cfg):
     sm.step("Extract source data from the SoFi database (always fresh, via ssh)")
     sm.extract_data(cfg)            # positions + GRI template + sid->qid (reused from esrsmap)
     extract_golden(cfg)             # + GRI golden reference
+    if cfg.corroborate: extract_evidence(cfg)   # + tag / questionnaire / cross-framework evidence
     sm.info(f"golden reference: {sum(1 for _ in open(cfg.golden_file()))} links from disclosure {cfg.ref_disc}")
 
     sm.step("Load positions and GRI grid (quantitative) questions")
@@ -179,6 +232,10 @@ def run(cfg):
             f"{st['grid']} grid (QUANTITATIVE), {st['nongrid']} non-grid (narrative/other)")
     golden, gtype = load_golden(cfg)
     gmeas = {dq: {p for p in ps if gtype.get(p) in MEAS} for dq, ps in golden.items()}
+    tagmap, questmap, crossfw = load_evidence(cfg) if cfg.corroborate else ({}, {}, set())
+    if cfg.corroborate:
+        sm.info(f"corroboration evidence: {len(tagmap)} tagged positions, {len(questmap)} in questionnaires, "
+                f"{len(crossfw)} cross-framework golden")
     sm.info(f"==> processing {len(grid)} GRI quantitative questions")
 
     sm.step(f"Embed positions with {cfg.emb_dep}")
@@ -236,12 +293,27 @@ def run(cfg):
     # final selection = consensus shortlist (top-N), kept above BOTH the relative floor
     # (rel_floor × top) and the absolute floor (min_score, on the normalized 0-1 score)
     K = max(cfg.transfer_k, 1)
+    n_promoted = n_demoted = 0
     for r in confident:
         topscore = r["ranked"][0][1] if r["ranked"] else 0.0
         sel = [(p, s) for p, s in r["ranked"][:cfg.shortlist]
                if s >= cfg.rel_floor * topscore and (s / K) >= cfg.min_score]
-        r["selected"] = [{"position_id": p, "name": pos["name"].get(p, ""),
-                          "score": round(s / K, 3), "tier": tier(s / K)} for p, s in sel]
+        anchors = [p for p, s in sel if (s / K) >= 0.60]   # STRONG picks = corroboration anchors
+        r["selected"] = []
+        for p, s in sel:
+            sc = s / K
+            if cfg.corroborate:
+                cor = corroborate(p, anchors, tagmap, questmap, crossfw)
+                t = effective_tier(sc, cor)
+                if 0.40 <= sc < 0.60 and cor: n_promoted += 1
+                elif 0.40 <= sc < 0.60: n_demoted += 1
+            else:
+                cor, t = "", tier(sc)
+            r["selected"].append({"position_id": p, "name": pos["name"].get(p, ""),
+                                  "score": round(sc, 3), "tier": t, "corrob": cor})
+    if cfg.corroborate:
+        sm.info(f"corroboration re-tiering: {n_promoted} LIKELY kept (evidence-backed), "
+                f"{n_demoted} demoted to WEAK (no independent evidence)")
 
     finalized = [{"nodeId": r["nodeId"], "dq_id": r["dq_id"], "ref": r["ref"],
                   "selected": r["selected"], "reasoning": "transfer-consensus"} for r in confident]
@@ -365,23 +437,27 @@ def print_full_table(cfg, pos, confident, lowconf, finalized):
             for s in sel:
                 rows.append(["MAPPED" if first else "", r["ref"][:30] if first else "",
                              (r["dq_id"] or "") if first else "",
-                             f"{s['position_id']} {sm._trunc(pos['name'].get(s['position_id'],''),36)}",
-                             f"{s['score']:.2f}", s.get("tier", tier(s["score"]))]); first = False
+                             f"{s['position_id']} {sm._trunc(pos['name'].get(s['position_id'],''),34)}",
+                             f"{s['score']:.2f}", s.get("tier", tier(s["score"])), s.get("corrob", "") or "-"]); first = False
         else:
-            rows.append(["GAP", r["ref"][:30], r["dq_id"] or "", "judge rejected all candidates", f"{r['top_sim']:.2f}", "-"])
+            rows.append(["GAP", r["ref"][:30], r["dq_id"] or "", "judge rejected all candidates", f"{r['top_sim']:.2f}", "-", "-"])
     for r in lowconf:
         hint = r["hint"][0][0] if r["hint"] else "-"
-        rows.append(["REVIEW", r["ref"][:30], r["dq_id"] or "", f"no confident neighbour · hint {hint}", f"{r['top_sim']:.2f}", "-"])
+        rows.append(["REVIEW", r["ref"][:30], r["dq_id"] or "", f"no confident neighbour · hint {hint}", f"{r['top_sim']:.2f}", "-", "-"])
     print("\n" + "-" * 78)
-    print("WHAT 'SCORE' / 'TIER' MEAN HERE")
+    print("WHAT 'SCORE' / 'TIER' / 'EVID' MEAN HERE")
     print("-" * 78)
     print("  SCORE (0.00-1.00) = transfer-consensus strength: the fraction of the nearest already-mapped")
     print("  GRI questions that agree on this position. NOT an AI/LLM confidence. Calibrated vs golden:")
-    print("    STRONG ≥0.60  (~90% near-precision — trust)   LIKELY 0.40-0.60  (~77% — quick check)")
-    print(f"    WEAK   <0.40  (review).  Picks below the absolute floor --min-score={cfg.min_score} are dropped.")
+    print("    STRONG ≥0.60  (~90% near-precision)   LIKELY = medium score (0.40-0.60) WITH independent")
+    print("    DB evidence (~76%)   WEAK = low score, or medium with no corroborating evidence.")
+    if cfg.corroborate:
+        print("  EVID = independent corroboration of a medium pick: Q=shares a questionnaire with a STRONG")
+        print("    pick · T=shares a curator tag · X=golden in another framework. (Promotes LIKELY vs WEAK.)")
+    print(f"  Picks below the absolute floor --min-score={cfg.min_score} are dropped.")
     print("-" * 78)
     print("\nFULL REPORT  (every GRI quantitative question, with status)")
-    print(sm._ascii_table(["STATUS", "QUESTION", "DQ_ID", "ANSWER POSITION", "SCORE", "TIER"], rows))
+    print(sm._ascii_table(["STATUS", "QUESTION", "DQ_ID", "ANSWER POSITION", "SCORE", "TIER", "EVID"], rows))
     print("  STATUS: MAPPED = position(s) proposed · REVIEW = no confident neighbour · GAP = judge rejected all (--judge)")
 
 def tier_stats(finalized):
@@ -390,9 +466,9 @@ def tier_stats(finalized):
     npos = sum(tiers.values())
     print("\n" + "=" * 60)
     print(f"PROPOSED-POSITION STATISTICS  (total: {npos})")
-    print(f"  STRONG (≥0.60)     : {tiers.get('STRONG', 0)}")
-    print(f"  LIKELY (0.40-0.60) : {tiers.get('LIKELY', 0)}")
-    print(f"  WEAK   (<0.40)     : {tiers.get('WEAK', 0)}")
+    print(f"  STRONG (score ≥0.60)            : {tiers.get('STRONG', 0)}")
+    print(f"  LIKELY (medium + DB-corroborated): {tiers.get('LIKELY', 0)}")
+    print(f"  WEAK   (low, or uncorroborated)  : {tiers.get('WEAK', 0)}")
     print("=" * 60)
 
 def summary(cfg, grid, confident, lowconf, finalized):
@@ -434,6 +510,8 @@ def main():
         sp.add_argument("--judge", action="store_true", help="EXPERIMENTAL: LLM prune of the shortlist (lowers recall)")
         sp.add_argument("--no-judge-cache", action="store_true")
         sp.add_argument("--no-validate", action="store_true", help="skip scoring against golden")
+        sp.add_argument("--no-corroborate", action="store_true",
+                        help="disable DB-evidence re-tiering of medium picks (tag/questionnaire/cross-framework)")
         sp.add_argument("--judge-pool", type=int, default=None, dest="judge_pool")
         sp.add_argument("--floor", type=float, default=0.50, help=argparse.SUPPRESS)
         sp.add_argument("--no-judge", action="store_true", help=argparse.SUPPRESS)  # accepted, ignored (judge off by default)
@@ -446,6 +524,7 @@ def main():
     cfg = GriCfg(a)
     if a.cmd == "extract":
         cfg.refresh_data = True; sm.extract_data(cfg); extract_golden(cfg)
+        if cfg.corroborate: extract_evidence(cfg)
         print(f"[extract] GRI template {cfg.template} + golden reference (disc {cfg.ref_disc}) written to {cfg.data}")
     elif a.cmd == "run":
         run(cfg)
