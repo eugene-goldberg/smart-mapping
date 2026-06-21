@@ -332,7 +332,7 @@ def run(cfg):
     if cfg.validate and golden:
         validate(cfg, pos, grid, sid2qid, gmeas, confident, finalized)
     print_full_table(cfg, pos, confident, lowconf, finalized, strongless)
-    tier_stats(finalized, strongless)
+    tier_stats(finalized, strongless, len(grid))
 
 # ----------------------------------------------------------------------------- optional judge prune (experimental)
 def judge_prune(cfg, pos, confident):
@@ -479,12 +479,14 @@ def print_full_table(cfg, pos, confident, lowconf, finalized, strongless=frozens
     print(sm._ascii_table(["STATUS", "QUESTION", "DQ_ID", "ANSWER POSITION", "SCORE", "TIER", "EVID"], rows))
     print("  STATUS: MAPPED = position(s) proposed · REVIEW = no confident neighbour · GAP = judge rejected all (--judge)")
 
-def tier_stats(finalized, strongless=frozenset()):
+def tier_stats(finalized, strongless=frozenset(), n_questions=None):
     sels = [s for r in finalized if r["nodeId"] not in strongless for s in r["selected"]]
     tiers = collections.Counter(s.get("tier", tier(s["score"])) for s in sels)
     npos = len(sels); distinct = len({s["position_id"] for s in sels})
     print("\n" + "=" * 60)
     print("PROPOSED-POSITION STATISTICS")
+    if n_questions is not None:
+        print(f"  TOTAL GRI quantitative questions : {n_questions}")
     print(f"  TOTAL mapped positions           : {npos}  ({distinct} distinct)")
     print(f"  STRONG (score ≥0.60)             : {tiers.get('STRONG', 0)}")
     print(f"  LIKELY (medium + DB-corroborated) : {tiers.get('LIKELY', 0)}")
