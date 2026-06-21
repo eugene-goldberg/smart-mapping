@@ -461,14 +461,15 @@ def print_full_table(cfg, pos, confident, lowconf, finalized):
     print("  STATUS: MAPPED = position(s) proposed · REVIEW = no confident neighbour · GAP = judge rejected all (--judge)")
 
 def tier_stats(finalized):
-    tiers = collections.Counter(s.get("tier", tier(s["score"]))
-                                for r in finalized for s in r["selected"])
-    npos = sum(tiers.values())
+    sels = [s for r in finalized for s in r["selected"]]
+    tiers = collections.Counter(s.get("tier", tier(s["score"])) for s in sels)
+    npos = len(sels); distinct = len({s["position_id"] for s in sels})
     print("\n" + "=" * 60)
-    print(f"PROPOSED-POSITION STATISTICS  (total: {npos})")
-    print(f"  STRONG (score ≥0.60)            : {tiers.get('STRONG', 0)}")
-    print(f"  LIKELY (medium + DB-corroborated): {tiers.get('LIKELY', 0)}")
-    print(f"  WEAK   (low, or uncorroborated)  : {tiers.get('WEAK', 0)}")
+    print("PROPOSED-POSITION STATISTICS")
+    print(f"  TOTAL mapped positions           : {npos}  ({distinct} distinct)")
+    print(f"  STRONG (score ≥0.60)             : {tiers.get('STRONG', 0)}")
+    print(f"  LIKELY (medium + DB-corroborated) : {tiers.get('LIKELY', 0)}")
+    print(f"  WEAK   (low, or uncorroborated)   : {tiers.get('WEAK', 0)}")
     print("=" * 60)
 
 def summary(cfg, grid, confident, lowconf, finalized):
