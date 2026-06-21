@@ -320,13 +320,19 @@ def run(cfg):
     if cfg.use_judge and confident:
         finalized = judge_prune(cfg, pos, confident)
 
+    # MAPPED requires a STRONG-tier anchor; questions with only LIKELY/WEAK picks → REVIEW
+    strongless = {r["nodeId"] for r in finalized
+                  if r["selected"] and not any(s.get("tier") == "STRONG" for s in r["selected"])}
+    if strongless:
+        sm.info(f"routed {len(strongless)} question(s) with no STRONG position to REVIEW")
+
     sm.step("Write reports and render the full report table")
-    write_reports(cfg, pos, grid, confident, lowconf, finalized)
-    summary(cfg, grid, confident, lowconf, finalized)
+    write_reports(cfg, pos, grid, confident, lowconf, finalized, strongless)
+    summary(cfg, grid, confident, lowconf, finalized, strongless)
     if cfg.validate and golden:
         validate(cfg, pos, grid, sid2qid, gmeas, confident, finalized)
-    print_full_table(cfg, pos, confident, lowconf, finalized)
-    tier_stats(finalized)
+    print_full_table(cfg, pos, confident, lowconf, finalized, strongless)
+    tier_stats(finalized, strongless)
 
 # ----------------------------------------------------------------------------- optional judge prune (experimental)
 def judge_prune(cfg, pos, confident):
@@ -403,36 +409,49 @@ def validate(cfg, pos, grid, sid2qid, gmeas, confident, finalized):
     print("-" * 78)
 
 # ----------------------------------------------------------------------------- reports + table
-def write_reports(cfg, pos, grid, confident, lowconf, finalized):
+def write_reports(cfg, pos, grid, confident, lowconf, finalized, strongless=frozenset()):
     fin_by_node = {r["nodeId"]: r for r in finalized}
+    mapped = [r for r in confident if r["nodeId"] not in strongless and fin_by_node.get(r["nodeId"], {}).get("selected")]
     with open(cfg.report_file("suggestions"), "w", encoding="utf-8") as f:
         f.write(f"# GRI (template {cfg.template}) — quantitative position suggestions\n\n")
-        f.write(f"{len(confident)}/{len(grid)} grid questions mapped (transfer-consensus).\n\n")
-        for r in confident:
+        f.write(f"{len(mapped)}/{len(grid)} grid questions mapped (transfer-consensus; STRONG anchor required).\n\n")
+        for r in mapped:
             sel = fin_by_node.get(r["nodeId"], {}).get("selected", [])
             f.write(f"## {r['ref']}  (dq_id={r['dq_id']})\n- columns: {', '.join(r['concepts'])[:200]}\n")
             for s in sel: f.write(f"  - [{s.get('tier','')} {s['score']}] {s['position_id']} — {s['name']}\n")
             f.write("\n")
     with open(cfg.report_file("review"), "w", encoding="utf-8") as f:
-        f.write(f"# GRI (template {cfg.template}) — review queue\n\n## Weak / no confident neighbour: {len(lowconf)}\n")
+        f.write(f"# GRI (template {cfg.template}) — review queue\n\n")
+        f.write(f"## No confident neighbour: {len(lowconf)}\n")
         for r in lowconf:
             f.write(f"- **{r['ref']}** (dq_id={r['dq_id']}) top_sim={r['top_sim']} "
                     f"concept-hint={[(p, round(s,2)) for p, s in r['hint']]}\n")
-    json.dump(finalized, open(cfg.report_file("final", "json"), "w"), indent=1)
+        f.write(f"\n## No STRONG anchor (best pick below 0.60): {len(strongless)}\n")
+        for r in confident:
+            if r["nodeId"] not in strongless: continue
+            sel = fin_by_node.get(r["nodeId"], {}).get("selected", [])
+            picks = [(s['position_id'], s['score'], s.get('tier', '')) for s in sel[:4]]
+            f.write(f"- **{r['ref']}** (dq_id={r['dq_id']}) best-picks={picks}\n")
+    mapped_fin = [r for r in finalized if r["selected"] and r["nodeId"] not in strongless]
+    json.dump(mapped_fin, open(cfg.report_file("final", "json"), "w"), indent=1)
     with open(cfg.report_file("final"), "w", encoding="utf-8") as f:
-        f.write(f"# GRI (template {cfg.template}) — finalized mappings ({finalized[0]['reasoning'] if finalized else 'n/a'})\n\n")
-        for r in finalized:
-            if not r["selected"]: continue
+        f.write(f"# GRI (template {cfg.template}) — finalized mappings ({mapped_fin[0]['reasoning'] if mapped_fin else 'n/a'})\n\n")
+        for r in mapped_fin:
             f.write(f"## {r['ref']}  (dq_id={r['dq_id']})\n")
             for s in r["selected"]: f.write(f"  - [{s.get('tier','')}] {s['position_id']} — {s['name']} ({s['score']})\n")
             f.write("\n")
 
-def print_full_table(cfg, pos, confident, lowconf, finalized):
+def print_full_table(cfg, pos, confident, lowconf, finalized, strongless=frozenset()):
     fin_by_node = {r["nodeId"]: r for r in finalized}
     rows = []
     for r in confident:
         sel = fin_by_node.get(r["nodeId"], {}).get("selected", [])
-        if sel:
+        if sel and r["nodeId"] in strongless:   # has picks but no STRONG anchor → REVIEW
+            best = sel[0]
+            rows.append(["REVIEW", r["ref"][:30], r["dq_id"] or "",
+                         f"no STRONG anchor · best {best['position_id']} {sm._trunc(pos['name'].get(best['position_id'],''),22)}",
+                         f"{best['score']:.2f}", best.get("tier", "-"), best.get("corrob", "") or "-"])
+        elif sel:
             first = True
             for s in sel:
                 rows.append(["MAPPED" if first else "", r["ref"][:30] if first else "",
@@ -460,8 +479,8 @@ def print_full_table(cfg, pos, confident, lowconf, finalized):
     print(sm._ascii_table(["STATUS", "QUESTION", "DQ_ID", "ANSWER POSITION", "SCORE", "TIER", "EVID"], rows))
     print("  STATUS: MAPPED = position(s) proposed · REVIEW = no confident neighbour · GAP = judge rejected all (--judge)")
 
-def tier_stats(finalized):
-    sels = [s for r in finalized for s in r["selected"]]
+def tier_stats(finalized, strongless=frozenset()):
+    sels = [s for r in finalized if r["nodeId"] not in strongless for s in r["selected"]]
     tiers = collections.Counter(s.get("tier", tier(s["score"])) for s in sels)
     npos = len(sels); distinct = len({s["position_id"] for s in sels})
     print("\n" + "=" * 60)
@@ -472,14 +491,15 @@ def tier_stats(finalized):
     print(f"  WEAK   (low, or uncorroborated)   : {tiers.get('WEAK', 0)}")
     print("=" * 60)
 
-def summary(cfg, grid, confident, lowconf, finalized):
+def summary(cfg, grid, confident, lowconf, finalized, strongless=frozenset()):
     fin = [r for r in finalized if r["selected"]]
+    mapped = [r for r in fin if r["nodeId"] not in strongless]
     print("\n" + "=" * 60)
     print(f"GRI template {cfg.template} (disc {cfg.disc}, ref {cfg.ref_disc})  |  "
           f"embed={cfg.emb_dep}  selector={'judge-prune' if cfg.use_judge else 'transfer-consensus'}")
     print(f"  GRI quantitative (grid) questions : {len(grid)}")
-    print(f"  mapped                            : {len(fin)}")
-    print(f"  weak → review                     : {len(lowconf)}")
+    print(f"  mapped (has STRONG anchor)        : {len(mapped)}")
+    print(f"  review (weak / no STRONG anchor)  : {len(lowconf) + len(strongless)}")
     if cfg.use_judge:
         print(f"  judge-rejected (GAP)              : {len(confident) - len(fin)}")
     print(f"  reports -> {os.path.basename(cfg.report_file('suggestions'))}, "
