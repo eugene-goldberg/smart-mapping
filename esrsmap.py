@@ -49,6 +49,8 @@ class Cfg:
         self.refresh_data = a.refresh_data
         self.refresh_emb  = a.refresh_embeddings
         self.ssh_host = a.ssh_host
+        self.dr_rerank = getattr(a, "dr_rerank", False)  # EXPERIMENTAL: ESRS DR-tag corroboration re-rank
+        self.dr_boost  = getattr(a, "dr_boost", 0.15)
         self.framework= getattr(a, "framework", None)   # framework name/abbrev (resolved in main)
         self.fw_id    = None                             # disclosure_framework_id once resolved
         self.fw_name  = None                             # display name once resolved
@@ -98,6 +100,12 @@ def extract_data(cfg):
         f"SELECT content FROM disclosure_template WHERE disclosure_template_id={cfg.template};"))
     open(cfg.p(f"disc{cfg.disc}_sid2qid.tsv"), "w").write(_sql(cfg,
         f"SELECT template_question_sid, disclosure_question_id FROM disclosure_question WHERE disclosure_id={cfg.disc};"))
+    # EXPERIMENTAL: position -> ESRS Disclosure-Requirement tag (e.g. 'ESRS E1-6'); curator-assigned.
+    open(cfg.p("pos_drtag.tsv"), "w").write(_sql(cfg,
+        "SELECT tp.position_id, td.name FROM tag_position tp "
+        "JOIN tag t ON t.tag_id=tp.tag_id "
+        "JOIN tag_group_dict tgd ON tgd.tag_group_id=t.tag_group_id AND tgd.language_id=2 AND tgd.name='ESRS' "
+        "JOIN tag_dict td ON td.tag_id=t.tag_id AND td.language_id=2;"))
 
 # ----------------------------------------------------------------------------- framework resolution
 def list_frameworks(cfg):
@@ -207,9 +215,42 @@ def humanize(c):
     return n
 def _en(x): return x.get("en", "") if isinstance(x, dict) else str(x)
 
+# --- EXPERIMENTAL: ESRS Disclosure-Requirement (DR) codes, used by --dr-rerank ----------------
+DR_CODE = re.compile(r'((?:[EGS]\d+-[\w]+)|(?:GOV-\d+)|(?:SBM-\d+)|(?:IRO-\d+)|(?:BP-\d+)|(?:MDR-[\w]+))')
+def dr_base(tag):
+    """Normalize a tag name to its base DR code: 'ESRS 2 GOV-1'->'GOV-1', 'ESRS E1-9 para 66a'->'E1-9'."""
+    s = re.sub(r'^ESRS\s*2\s*', '', tag.strip())
+    s = re.sub(r'^ESRS\s*', '', s)
+    return re.split(r'\s+para\s+', s)[0].strip()
+def load_drtags(cfg):
+    """position_id -> set(DR base codes) from the curator's ESRS tags. Empty if extract absent."""
+    m = defaultdict(set); fp = cfg.p("pos_drtag.tsv")
+    if os.path.exists(fp):
+        for line in open(fp, encoding="utf-8", errors="replace"):
+            f = line.rstrip("\n").rstrip("\r").split("\t")
+            if len(f) >= 2 and f[0].isdigit():
+                b = dr_base(f[1])
+                if b: m[int(f[0])].add(b)
+    return m
+def _section_dr_map(doc):
+    """nodeId -> DR code inherited from the nearest enclosing section title (e.g. 'E1-6 – Gross Scopes…')."""
+    out = {}
+    def w(n, code):
+        if isinstance(n, dict):
+            if n.get("nodeType") == "section":
+                mm = DR_CODE.search(_en(n.get("title"))[:16])
+                if mm: code = mm.group(1)
+            if n.get("nodeId"): out[n["nodeId"]] = code
+            for c in n.get("nodes", []) or []: w(c, code)
+        elif isinstance(n, list):
+            for c in n: w(c, code)
+    w(doc, None)
+    return out
+
 def load_quant_questions(cfg):
     """Returns (quant[list], abstain_param[list], stats[dict]) from the disclosure template content tree."""
     doc = json.load(open(cfg.tmpl_file(), encoding="utf-8"))
+    drmap = _section_dr_map(doc)
     quant, abstain = [], []
     st = {"total": 0, "datapoint": 0, "quant": 0, "param": 0, "qual": 0}
     def walk(n):
@@ -220,7 +261,8 @@ def load_quant_questions(cfg):
                 nums = [c for c in cs if is_num(c)]
                 if cs: st["datapoint"] += 1
                 node = {"nodeId": n.get("nodeId"), "ref": _en(n.get("title")),
-                        "desc": _en(n.get("description"))[:600], "concepts": nums}
+                        "desc": _en(n.get("description"))[:600], "concepts": nums,
+                        "dr": drmap.get(n.get("nodeId"))}
                 if nums:
                     quant.append(node); st["quant"] += 1
                 elif any(looks_numeric(c) for c in cs):
@@ -353,6 +395,12 @@ def run(cfg):
         segs = [int(x) for x in pos["path"].get(pid, "").split("/") if x]
         return " > ".join(pos["name"].get(s, "") for s in segs[:-1] if pos["name"].get(s, ""))
 
+    drtags = load_drtags(cfg) if cfg.dr_rerank else {}
+    if cfg.dr_rerank:
+        n_with_dr = sum(1 for q in quant if q.get("dr"))
+        info(f"DR-tag re-rank ON (boost +{cfg.dr_boost}): {len(drtags)} positions carry curator ESRS DR tags; "
+             f"{n_with_dr}/{len(quant)} questions resolved a DR code — gate/statuses unchanged, judge pool reordered")
+
     step("Match concepts→positions, expand variant siblings, apply the confidence gate")
     confident, lowconf = [], []
     for q in quant:
@@ -364,9 +412,15 @@ def run(cfg):
                     cand.setdefault(sp, _dot(cn[humanize(c)], pn[sp]))
         ranked = sorted(cand.items(), key=lambda x: -x[1])
         top1 = ranked[0][1] if ranked else 0.0
+        # judge-pool ordering: optionally corroborate with the curator's DR tag (gate uses raw `ranked`)
+        ranked_judge = ranked
+        if cfg.dr_rerank and q.get("dr"):
+            dr = q["dr"]
+            ranked_judge = sorted(cand.items(),
+                key=lambda x: -(x[1] + (cfg.dr_boost if dr in drtags.get(x[0], ()) else 0.0)))
         rec = {"nodeId": q["nodeId"], "dq_id": sid2qid.get(q["nodeId"]), "ref": q["ref"],
                "desc": q["desc"], "concepts": [humanize(c) for c in q["concepts"]],
-               "top_score": round(top1, 3), "ranked": ranked}
+               "top_score": round(top1, 3), "ranked": ranked, "ranked_judge": ranked_judge}
         (confident if top1 >= cfg.conf else lowconf).append(rec)
     info(f"confident (top-1 ≥ {cfg.conf}): {len(confident)} | low-confidence → review: {len(lowconf)}")
 
@@ -381,8 +435,11 @@ def run(cfg):
         def jkey(r, pool):
             # Key on stable QUESTION identity (not the embedding-volatile pool) so reruns are 100%% cache hits.
             # Cached selections are still filtered to the live pool below, so a changed pool can't inject stale ids.
+            # Default mode keeps the historical key exactly; --dr-rerank adds a field so its
+            # (differently-ordered pool) verdicts are cached separately and don't collide.
+            extra = {"dr": cfg.dr_boost} if cfg.dr_rerank else {}
             payload = json.dumps({"m": cfg.chat_dep, "t": cfg.temperature, "node": r["nodeId"],
-                                  "concepts": r["concepts"], "desc": r["desc"]}, sort_keys=True)
+                                  "concepts": r["concepts"], "desc": r["desc"], **extra}, sort_keys=True)
             return hashlib.sha256(payload.encode()).hexdigest()
         cli = _client()
         SYS = (f"You are an ESG reporting expert finalizing which internal metrics ('positions') answer a "
@@ -391,7 +448,7 @@ def run(cfg):
                "AND Market-based). Prefer specific measurable positions over broad headers. Only use candidate IDs. "
                "If none truly fits, return an empty list. Respond as JSON {\"selected\":[ids],\"reasoning\":\"...\"}.")
         for i, r in enumerate(confident, 1):
-            pool = r["ranked"][:cfg.judge_pool]
+            pool = r.get("ranked_judge", r["ranked"])[:cfg.judge_pool]
             lines = [f"id={p} | {pos['name'].get(p,'')} | unit={pos['unit'].get(p,'-')} | path={lineage(p)} | sim={s:.2f}"
                      for p, s in pool]
             user = (f"{cfg.fw_code} QUESTION {r['ref']}\nDatapoint concept(s): {', '.join(r['concepts'])}\n"
@@ -574,6 +631,11 @@ def main():
         sp.add_argument("--refresh-data", action="store_true")
         sp.add_argument("--refresh-embeddings", action="store_true")
         sp.add_argument("--ssh-host", default="sofi")
+        sp.add_argument("--dr-rerank", action="store_true",
+                        help="EXPERIMENTAL (ESRS): boost candidates sharing the question's ESRS Disclosure-"
+                             "Requirement tag (e.g. E1-6) when ordering the judge pool. Gate/statuses unchanged.")
+        sp.add_argument("--dr-boost", type=float, default=0.15,
+                        help="additive similarity boost for DR-tag-matched candidates (used with --dr-rerank)")
     a = ap.parse_args()
     if not a.cmd: ap.print_help(); return
     cfg = Cfg(a)
